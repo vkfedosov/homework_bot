@@ -8,7 +8,8 @@ import requests
 import telegram
 from dotenv import load_dotenv
 
-from exceptions import InvalidApiError, InvalidResponseError, SendMessageError
+from exceptions import (ApiResponseError, HomeworkError, TelegramBotError,
+                        TelegramNetworkError)
 
 load_dotenv()
 
@@ -31,7 +32,7 @@ PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-RETRY_TIME = 10
+RETRY_TIME = 1800
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
@@ -46,14 +47,31 @@ def send_message(bot, message):
     """Отправляет сообщение в Telegram чат."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-    except Exception as error:
-        raise SendMessageError(
-            f'Ошибка:{error}, сообщение не было отправлено в Telegram'
+    except telegram.error.Unauthorized as error:
+        error_message = f'Bot не имеет необходимых прав: {error}'
+        raise TelegramBotError(error_message)
+    except telegram.error.InvalidToken as error:
+        error_message = f'Токен недействителен: {error}'
+        raise TelegramBotError(error_message)
+    except telegram.error.RetryAfter as error:
+        error_message = (
+            f'Превышено значение максимального количества запросов: {error}'
         )
+        raise TelegramBotError(error_message)
+    except telegram.error.TimedOut as error:
+        error_message = (
+            f'Выполнение запроса заняло слишком много времени: {error}'
+        )
+        raise TelegramNetworkError(error_message)
+    except telegram.error.BadRequest as error:
+        error_message = (
+            f'Telegram не может корректно обработать запрос: {error}'
+        )
+        raise TelegramNetworkError(error_message)
 
 
 def get_api_answer(current_timestamp):
-    """Делает запрос к эндпоинту API-сервиса."""
+    """Выполняет запрос к эндпоинту API-сервиса."""
     timestamp = current_timestamp or int(time.time())
     params = {'from_date': timestamp}
     try:
@@ -62,28 +80,44 @@ def get_api_answer(current_timestamp):
             headers=HEADERS,
             params=params,
         )
-    except Exception as error:
-        raise InvalidApiError(f'Ошибка при запросе к API: {error}')
+    except requests.exceptions.HTTPError as error:
+        error_message = f'Ошибка Http: {error}'
+        raise ApiResponseError(error_message)
+    except requests.exceptions.ConnectionError as error:
+        error_message = f'Ошибка подключения: {error}'
+        raise ApiResponseError(error_message)
+    except requests.exceptions.Timeout as error:
+        error_message = f'Время запроса вышло: {error}'
+        raise ApiResponseError(error_message)
+    except requests.exceptions.TooManyRedirects as error:
+        error_message = (
+            f'Превышено значение максимального количества редиректов: {error}'
+        )
+        raise ApiResponseError(error_message)
+    except requests.exceptions.RequestException as error:
+        error_message = f'Ошибка при запросе к API: {error}'
+        raise SystemExit(error_message)
+
     if homework_statuses.status_code != HTTPStatus.OK:
         status_code = homework_statuses.status_code
-        raise InvalidResponseError(f'"{ENDPOINT}" - недоступен. '
-                                   f'Код ответа API: {status_code}')
+        raise ApiResponseError(
+            f'"{ENDPOINT}" - недоступен. Код ответа API: {status_code}'
+        )
     return homework_statuses.json()
 
 
 def check_response(response):
     """Проверяет ответ API на корректность."""
-    if type(response) is not dict:
+    if not isinstance(response, dict):
         raise TypeError('Ответ API не является словарем')
+    if 'homeworks' not in response:
+        raise KeyError('Отсутствует ключ "homework_name" в ответе API')
+    if not isinstance(response['homeworks'], list):
+        raise TypeError('Ответ API не является списком')
     try:
-        homeworks = response['homeworks']
-    except KeyError:
-        raise KeyError('В ответе API отсутствует ключ homeworks')
-    try:
-        homework = homeworks[0]
-    except IndexError:
-        raise IndexError('Список домашних заданий пуст')
-    return homework
+        return response['homeworks'][0]
+    except Exception as error:
+        raise HomeworkError(f'Домашние задание отсутствует: {error}')
 
 
 def parse_status(homework):
@@ -106,22 +140,35 @@ def check_tokens():
 def main():
     """Основная логика работы бота."""
     if not check_tokens():
-        logger.critical('Отсутствуют одна или несколько переменных окружения')
-        raise SystemExit('Отсутствуют одна или несколько переменных окружения')
+        error_message = 'Отсутствуют одна или несколько переменных окружения'
+        logger.critical(error_message)
+        raise SystemExit(error_message)
+
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     current_timestamp = int(time.time())
+
+    last_massage = ''
+    last_massage_error = ''
+
     while True:
         try:
             response = get_api_answer(current_timestamp)
             current_timestamp = response.get('current_date')
             homework = check_response(response)
             message = parse_status(homework)
-            send_message(bot, message)
+            if message != last_massage:
+                send_message(bot, message)
+                last_massage = message
             time.sleep(RETRY_TIME)
-        except (Exception, TypeError, KeyError, IndexError) as error:
-            message_error = f'Сбой в работе бота: {error}'
-            logging.error(message_error)
-            send_message(bot, message_error)
+        except telegram.error.TelegramError as error:
+            error_message = f'Ошибка отправки сообщения в Telegram: {error}'
+            raise TelegramBotError(error_message)
+        except Exception as error:
+            error_message = f'Сбой в работе бота: {error}'
+            logging.error(error_message)
+            if error_message != last_massage_error:
+                send_message(bot, error_message)
+                last_massage_error = error_message
         time.sleep(RETRY_TIME)
 
 

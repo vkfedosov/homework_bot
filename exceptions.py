@@ -1,13 +1,18 @@
-class SendMessageError(Exception):
-    """Ошибка отправки сообщения."""
+class TelegramBotError(Exception):
+    """Ошибка отправки сообщения в Telegram."""
     pass
 
 
-class InvalidApiError(Exception):
+class TelegramNetworkError(Exception):
+    """Ошибка подключения к сети."""
+    pass
+
+
+class ApiResponseError(Exception):
     """Ошибка при запросе к API."""
     pass
 
 
-class InvalidResponseError(Exception):
-    """Ошибка - status_code API != 200."""
+class HomeworkError(Exception):
+    """Ошибка при получении домашнего задания."""
     pass
