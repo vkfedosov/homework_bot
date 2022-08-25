@@ -31,7 +31,7 @@ PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-RETRY_TIME = 1800
+RETRY_TIME = 10
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
@@ -40,8 +40,6 @@ HOMEWORK_STATUSES = {
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.',
 }
-
-last_check_timestamp = int(time.time())
 
 
 def get_api_answer(timestamp):
@@ -54,10 +52,7 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params=params,
         )
-    except (requests.exceptions.ConnectionError,
-            requests.exceptions.HTTPError,
-            requests.exceptions.Timeout,
-            requests.exceptions.TooManyRedirects,) as error:
+    except requests.exceptions.RequestException as error:
         error_message = f'Ошибка при запросе к API: {error}'
         raise GetStatusException(error_message)
 
@@ -111,39 +106,9 @@ def send_message(bot, message):
     """Отправляет сообщение в Telegram чат."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-    except (telegram.error.BadRequest,
-            telegram.error.InvalidToken,
-            telegram.error.RetryAfter,
-            telegram.error.TimedOut,
-            telegram.error.Unauthorized,) as error:
+    except telegram.error.TelegramError as error:
         error_message = f'Ошибка при отправке сообщения в Telegram: {error}'
         raise TelegramBotSendError(error_message)
-
-
-def get_status_message():
-    """Получение статуса домашнего задания."""
-    global last_check_timestamp
-    response = get_api_answer(last_check_timestamp)
-    last_check_timestamp = response.get('current_date')
-
-    try:
-        homeworks = check_response(response)
-    except (TypeError, KeyError) as error:
-        error_message = f'Получены неправильные данные: {error}'
-        raise GetStatusException(error_message)
-
-    if not homeworks:
-        return ''
-
-    last_homework = homeworks[0]
-
-    try:
-        message = parse_status(last_homework)
-    except KeyError as error:
-        error_message = f'Ошибка при получении данных по API: {error}'
-        raise GetStatusException(error_message)
-
-    return message
 
 
 def main():
@@ -154,24 +119,35 @@ def main():
         raise SystemExit(error_message)
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
+    last_check_timestamp = int(time.time())
 
     last_sent_message = ''
 
     while True:
 
         try:
-            message = get_status_message()
-        except GetStatusException as error:
-            message = f'Ошибка получения статуса домашней работы: {error}'
-            logging.error(message)
+            response = get_api_answer(last_check_timestamp)
+            last_check_timestamp = response.get('current_date')
 
-        if message and message != last_sent_message:
-            try:
+            homeworks = check_response(response)
+            if homeworks:
+                continue
+
+            last_homework = homeworks[0]
+
+            message = parse_status(last_homework)
+            if message != last_sent_message:
                 send_message(bot, message)
                 last_sent_message = message
-            except TelegramBotSendError as error:
-                error_message = f'Ошибка отправки сообщения: {error}'
-                logging.error(error_message)
+
+        except TelegramBotSendError as error:
+            error_message = (
+                f'Ошибка при отправке сообщения в Telegram: {error}'
+            )
+            logging.error(error_message)
+        except Exception as error:
+            error_message = f'Сбой в работе Telegram бота: {error}'
+            logging.error(error_message)
 
         time.sleep(RETRY_TIME)
 
