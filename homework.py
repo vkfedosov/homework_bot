@@ -8,7 +8,7 @@ import requests
 import telegram
 from dotenv import load_dotenv
 
-from exceptions import GetStatusException, TelegramBotSendError
+from exceptions import GetStatusException, SendMessageError
 
 load_dotenv()
 
@@ -31,7 +31,7 @@ PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-RETRY_TIME = 10
+RETRY_TIME = 300
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
@@ -107,8 +107,8 @@ def send_message(bot, message):
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
     except telegram.error.TelegramError as error:
-        error_message = f'Ошибка при отправке сообщения в Telegram: {error}'
-        raise TelegramBotSendError(error_message)
+        error_message = f'Ошибка при отправке сообщения: {error}'
+        raise SendMessageError(error_message)
 
 
 def main():
@@ -130,7 +130,7 @@ def main():
             last_check_timestamp = response.get('current_date')
 
             homeworks = check_response(response)
-            if homeworks:
+            if not homeworks:
                 continue
 
             last_homework = homeworks[0]
@@ -140,14 +140,23 @@ def main():
                 send_message(bot, message)
                 last_sent_message = message
 
-        except TelegramBotSendError as error:
+        except SendMessageError as error:
             error_message = (
-                f'Ошибка при отправке сообщения в Telegram: {error}'
+                f'Ошибка при отправке сообщения: {error}'
             )
             logging.error(error_message)
         except Exception as error:
-            error_message = f'Сбой в работе Telegram бота: {error}'
+            error_message = f'Сбой в работе бота: {error}'
             logging.error(error_message)
+            if error_message != last_sent_message:
+                try:
+                    send_message(bot, error_message)
+                    last_sent_message = error_message
+                except SendMessageError as error:
+                    error_message = (
+                        f'Ошибка при отправке сообщения: {error}'
+                    )
+                    logging.error(error_message)
 
         time.sleep(RETRY_TIME)
 
