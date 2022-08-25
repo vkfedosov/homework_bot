@@ -149,14 +149,8 @@ def main():
             error_message = f'Сбой в работе бота: {error}'
             logging.error(error_message)
             if error_message != last_sent_message:
-                try:
-                    send_message(bot, error_message)
-                    last_sent_message = error_message
-                except SendMessageError as error:
-                    error_message = (
-                        f'Ошибка при отправке сообщения: {error}'
-                    )
-                    logging.error(error_message)
+                send_message(bot, error_message)
+                last_sent_message = error_message
 
         time.sleep(RETRY_TIME)
 
